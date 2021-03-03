@@ -1,0 +1,200 @@
+version: 2.1
+
+constants:
+  version-parameter: &version-parameter
+    version:
+      type: string
+  target-parameter: &target-parameter
+    target:
+      type: string
+
+commands:
+  restore-rust-cache:
+    steps:
+      - run: |
+          cat Cargo.lock >> /tmp/build-dep
+          cat rust-toolchain >> /tmp/build-dep
+      - restore_cache:
+          key: &cache-key-rust cache-cargo-target-{{ .Environment.CIRCLE_JOB }}-{{ .Environment.CIRCLECI_CACHE_VERSION }}-{{ checksum "/tmp/build-dep" }}
+  save-rust-cache:
+    steps:
+      - save_cache:
+          key: *cache-key-rust
+          paths:
+            - ~/.cargo
+            - target
+  install-rustup:
+    steps:
+      - restore_cache:
+          key: &cache-key-rustup cache-rustup-{{ .Environment.CIRCLE_JOB }}-{{ .Environment.CIRCLECI_CACHE_VERSION }}-{{ checksum "/tmp/rustup" }}
+      - run:
+          name: Install Rust
+          command: |
+            if rustup help >& /dev/null
+            then
+                rustup update
+            else
+                curl -sSfL https://sh.rustup.rs > rustup.sh
+                export RUST_CHANNEL=`cat rust-toolchain`
+                sh rustup.sh -y --default-toolchain ${RUST_CHANNEL}-x86_64-unknown-linux-gnu --profile minimal
+            fi
+      - save_cache:
+          key: *cache-key-rustup
+          paths:
+            - ~/.rustup
+  deploy:
+    parameters:
+      <<: *version-parameter
+      <<: *target-parameter
+    steps:
+      - run:
+          name: Deploy docker image (<<parameters.version>>) (<<parameters.target>>)
+          command: |
+            version=<<parameters.version>>
+            target=<<parameters.target>>
+            echo $DOCKER_PASSWORD | docker login --username $DOCKER_USER --password-stdin
+            docker build -t "idein/gatekeeper:${version}-${target}" -f "Dockerfile.${target}" .
+            docker push "idein/gatekeeper:${version}-${target}"
+
+jobs:
+  build:
+    docker:
+      - image: circleci/rust:1.50.0-buster
+        environment:
+          RUST_BACKTRACE: 1
+          CARGO_HOME: /home/circleci/.cargo
+          GIT_AUTHOR_NAME: circleci
+          GIT_AUTHOR_EMAIL: circleci@example.com
+    working_directory: /tmp/gatekeeper
+    steps:
+      - checkout
+      - run:
+          name: Merge origin/master
+          command: |
+            git config --global user.email "circleci@example.com"
+            git config --global user.name "circleci"
+            git merge --no-edit origin/master
+      - run:
+          name: Environment Setup
+          command: |
+            rustup component add clippy rustfmt
+      - restore-rust-cache
+      - run:
+          name: Format
+          command: cargo fmt -- --check
+      - run:
+          name: Lint
+          command: cargo clippy -- -D warnings
+      - run:
+          name: Build Gatekeeper
+          command: |
+            cargo build --verbose
+      - run:
+          name: Unit Test
+          command: |
+            cargo test --verbose -- --nocapture
+      - save-rust-cache
+
+  integration_test:
+    machine:
+      image: circleci/classic:201808-01
+    environment:
+      RUST_BACKTRACE: 1
+      GIT_AUTHOR_NAME: circleci
+      GIT_AUTHOR_EMAIL: circleci@example.com
+    working_directory: /tmp/gatekeeper
+    steps:
+      - checkout
+      - run:
+          name: Merge origin/master
+          command: |
+            git config --global user.email "circleci@example.com"
+            git config --global user.name "circleci"
+            git merge --no-edit origin/master
+      - run: cat rust-toolchain >> /tmp/rustup
+      - install-rustup
+      - restore-rust-cache
+      - run:
+          name: Build Image
+          command: |
+            docker-compose build
+      - run:
+          name: Up Test Containers
+          command: |
+            docker-compose up -d
+      - run:
+          name: Integration Test
+          shell: /bin/bash --login -eo pipefail
+          command: |
+            cargo test --verbose -- --nocapture --ignored
+      - save-rust-cache
+
+  deploy-latest:
+    machine: true
+    parameters:
+      <<: *target-parameter
+    steps:
+      - checkout
+      - deploy:
+          version: latest
+          target: <<parameters.target>>
+
+  deploy-tags:
+    machine: true
+    parameters:
+      <<: *target-parameter
+    steps:
+      - checkout
+      - run:
+          name: "Set environment variables: $MAJOR, $MINOR, $PATCH"
+          command: |
+            TAG=$(git describe --tags)                                    #=> v1.2.3
+            TAG=${TAG#v}                                                  #=> 1.2.3
+            MAJOR="$(echo $TAG | cut -d. -f1)"                            #=> 1
+            MINOR="$(echo $TAG | cut -d. -f1).$(echo $TAG | cut -d. -f2)" #=> 1.2
+            PATCH="$TAG"                                                  #=> 1.2.3
+
+            # sharing environment variables between steps
+            echo "export MAJOR=$MAJOR" >> $BASH_ENV
+            echo "export MINOR=$MINOR" >> $BASH_ENV
+            echo "export PATCH=$PATCH" >> $BASH_ENV
+      - deploy:
+          version: $MAJOR
+          target: <<parameters.target>>
+      - deploy:
+          version: $MINOR
+          target: <<parameters.target>>
+      - deploy:
+          version: $PATCH
+          target: <<parameters.target>>
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - build
+      - integration_test:
+          requires:
+            - build
+
+  deploy-latest:
+    jobs:
+      - deploy-latest:
+          matrix:
+            parameters:
+              target: ["x86_64"]
+          filters:
+            branches:
+              only: master
+
+  deploy-tags:
+    jobs:
+      - deploy-tags:
+          matrix:
+            parameters:
+              target: ["x86_64"]
+          filters:
+            tags:
+              only: /^v.*/
+            branches:
+              ignore: /.*/

@@ -1,19 +1,15 @@
 use std::fmt;
-use std::ops::{Deref, DerefMut};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use log::*;
 
-use crate::auth_service::AuthService;
 use crate::byte_stream::ByteStream;
 use crate::connector::Connector;
-use crate::model::dao::*;
 use crate::model::model::*;
-use crate::model::{Error, ErrorKind};
+use crate::model::Error;
 use crate::relay::{self, RelayHandle};
-use crate::rw_socks_stream::ReadWriteStream;
 use crate::server_command::ServerCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -74,13 +70,11 @@ impl SessionHandle {
 }
 
 #[derive(Debug)]
-pub struct Session<D, A, S> {
+pub struct Session<D, S> {
     pub id: SessionId,
-    pub version: ProtocolVersion,
     pub dst_connector: D,
-    pub authorizer: A,
     pub server_addr: SocketAddr,
-    pub conn_rule: ConnectRule,
+    pub dst_addr: Address,
     /// termination message receiver
     rx: Arc<Mutex<mpsc::Receiver<()>>>,
     /// Send `Disconnect` command to the main thread.
@@ -88,31 +82,26 @@ pub struct Session<D, A, S> {
     guard: Arc<Mutex<DisconnectGuard<S>>>,
 }
 
-impl<D, A, S> Session<D, A, S>
+impl<D, S> Session<D, S>
 where
     D: Connector,
-    A: AuthService,
     S: Send + 'static,
 {
     /// Returns Self and termination message sender.
     pub fn new(
         id: SessionId,
-        version: ProtocolVersion,
         dst_connector: D,
-        authorizer: A,
         server_addr: SocketAddr,
-        conn_rule: ConnectRule,
+        dst_addr: Address,
         tx_cmd: mpsc::Sender<ServerCommand<S>>,
     ) -> (Self, mpsc::SyncSender<()>) {
         let (tx, rx) = mpsc::sync_channel(2);
         (
             Self {
                 id,
-                version,
                 dst_connector,
-                authorizer,
                 server_addr,
-                conn_rule,
+                dst_addr,
                 rx: Arc::new(Mutex::new(rx)),
                 guard: Arc::new(Mutex::new(DisconnectGuard::new(id, tx_cmd))),
             },
@@ -120,53 +109,36 @@ where
         )
     }
 
-    fn connect_reply(&self, connect_result: Result<(), ConnectError>) -> ConnectReply {
-        ConnectReply {
-            version: self.version,
-            connect_result,
-            server_addr: self.server_addr.clone().into(),
-        }
-    }
-
     fn make_session<'a>(
         &self,
         src_addr: SocketAddr,
-        mut src_conn: impl ByteStream + 'a,
+        src_conn: impl ByteStream + 'a,
     ) -> Result<RelayHandle, Error> {
-        let mut socks = ReadWriteStream::new(&mut src_conn);
+        info!("connect new client: dst_addr = {}", self.dst_addr);
 
-        let select = negotiate_auth_method(self.version, &self.authorizer, &mut socks)?;
-        debug!("auth method: {:?}", select);
-        let mut socks = ReadWriteStream::new(self.authorizer.authorize(select.method, src_conn)?);
-
-        let req = socks.recv_connect_request()?;
-        debug!("connect request: {:?}", req);
-
-        let (conn, dst_addr) = match perform_command(
-            req.command,
-            &self.dst_connector,
-            &self.conn_rule,
-            req.connect_to.clone(),
-        ) {
-            Ok((conn, dst_addr)) => {
-                info!("connected: {}: {}", req.connect_to, dst_addr);
-                socks.send_connect_reply(self.connect_reply(Ok(())))?;
-                (conn, dst_addr)
+        let (strm, proxy_addr) = match self
+            .dst_connector
+            .connect_byte_stream(self.dst_addr.clone())
+        {
+            Ok((strm, proxy_addr)) => {
+                info!(
+                    "connected: proxy_addr = {}, dst_addr = {}",
+                    proxy_addr, self.dst_addr
+                );
+                (strm, proxy_addr)
             }
             Err(err) => {
-                error!("command error: {}", err);
-                trace!("command error: {:?}", err);
-                // reply error
-                socks.send_connect_reply(self.connect_reply(Err(err.cerr())))?;
+                error!("connect error: {}", err);
+                trace!("connect error: {:?}", err);
                 return Err(err);
             }
         };
 
         relay::spawn_relay(
             src_addr,
-            dst_addr,
-            socks.into_inner(),
-            conn,
+            proxy_addr,
+            Box::new(src_conn),
+            strm,
             self.rx.clone(),
             self.guard.clone(),
         )
@@ -178,53 +150,6 @@ where
         src_conn: impl ByteStream + 'a,
     ) -> Result<RelayHandle, Error> {
         self.make_session(src_addr, src_conn)
-    }
-}
-
-fn perform_command(
-    cmd: Command,
-    connector: impl Deref<Target = impl Connector>,
-    rule: &ConnectRule,
-    connect_to: Address,
-) -> Result<(impl ByteStream, SocketAddr), Error> {
-    match cmd {
-        Command::Connect => {}
-        cmd @ Command::Bind | cmd @ Command::UdpAssociate => {
-            return Err(ErrorKind::command_not_supported(cmd).into());
-        }
-    };
-    // filter out request not sufficies the connection rule
-    check_rule(rule, connect_to.clone(), L4Protocol::Tcp)?;
-    connector.connect_byte_stream(connect_to)
-}
-
-fn negotiate_auth_method(
-    version: ProtocolVersion,
-    auth: impl Deref<Target = impl AuthService>,
-    mut socks: impl DerefMut<Target = impl SocksStream>,
-) -> Result<MethodSelection, Error> {
-    let candidates = socks.recv_method_candidates()?;
-    trace!("candidates: {:?}", candidates);
-
-    let selection = auth.select(&candidates.method)?;
-    trace!("selection: {:?}", selection);
-
-    let method_sel = MethodSelection {
-        version,
-        method: selection.unwrap_or(Method::NoMethods),
-    };
-    socks.send_method_selection(method_sel)?;
-    match method_sel.method {
-        Method::NoMethods => Err(ErrorKind::NoAcceptableMethod.into()),
-        _ => Ok(method_sel),
-    }
-}
-
-fn check_rule(rule: &ConnectRule, addr: Address, proto: L4Protocol) -> Result<(), Error> {
-    if rule.check(addr.clone(), proto) {
-        Ok(())
-    } else {
-        Err(ErrorKind::connection_not_allowed(addr, proto).into())
     }
 }
 

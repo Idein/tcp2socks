@@ -159,6 +159,20 @@ impl ToSocketAddrs for Address {
     }
 }
 
+impl socks::ToTargetAddr for Address {
+    fn to_target_addr(&self) -> std::io::Result<socks::TargetAddr> {
+        match self {
+            Address::IpAddr(std::net::IpAddr::V4(ipaddr), port) => {
+                (*ipaddr, *port).to_target_addr()
+            }
+            Address::IpAddr(std::net::IpAddr::V6(ipaddr), port) => {
+                (*ipaddr, *port).to_target_addr()
+            }
+            Address::Domain(domain, port) => (domain.as_str(), *port).to_target_addr(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConnectRequest {
     pub version: ProtocolVersion,

@@ -1,52 +1,108 @@
-#![cfg(test)]
-use std::path::PathBuf;
+#[cfg(test)]
+mod tests {
+    use crate::config::ServerConfig;
+    use crate::server::Server;
+    use crate::server_command::ServerCommand;
+    use eyre::Result;
+    use gatekeeper as gk;
+    use rand::seq::SliceRandom;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
-#[test]
-#[ignore]
-fn get_main() {
-    use std::io::prelude::*;
+    fn start_oneshot_echo_server(port: u16) -> JoinHandle<()> {
+        async fn start(port: u16) -> Result<()> {
+            let listener = TcpListener::bind(&format!("127.0.0.1:{}", port)).await?;
 
-    use log::*;
-    use regex::Regex;
-    use socks::*;
+            let (mut socket, _) = listener.accept().await?;
 
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    println!("root: {}", root.display());
+            let mut buf = [0_u8; 1024];
 
-    let exp = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
+            // In a loop, read data from the socket and write the data back.
+            loop {
+                let n = match socket.read(&mut buf).await {
+                    // socket closed
+                    Ok(n) if n == 0 => return Ok(()),
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("failed to read from socket; err = {:?}", e);
+                        return Ok(());
+                    }
+                };
 
-    let act = {
-        // connect to socks proxy
-        let mut conn = Socks5Stream::connect(
-            "localhost:1080",
-            TargetAddr::Domain("myhttpd".to_owned(), 80),
-        )
-        .unwrap();
-
-        // request main.rs
-        write!(conn, "GET /src/main.rs HTTP/1.1\r\n").unwrap();
-        write!(conn, "Host: myhttpd\r\n\r\n").unwrap();
-        conn.flush().unwrap();
-
-        let mut conn = std::io::BufReader::new(conn);
-        // skip http headers
-        let mut line = String::new();
-        let mut content_length = None;
-        let re = Regex::new(r"Content-Length: (\d+)\r\n").unwrap();
-        while let Ok(_) = conn.read_line(&mut line) {
-            debug!("line: {:?}", line);
-            if line == "\r\n" {
-                break;
+                // Write the data back
+                if let Err(e) = socket.write_all(&buf[0..n]).await {
+                    eprintln!("failed to write to socket; err = {:?}", e);
+                    return Ok(());
+                }
             }
-            if let Some(m) = re.captures(&line) {
-                content_length = m.get(1).unwrap().as_str().parse().ok();
-            }
-            line.clear();
         }
-        let mut buff = Vec::new();
-        buff.resize(content_length.unwrap(), 0);
-        conn.read_exact(&mut buff[..]).unwrap();
-        String::from_utf8_lossy(&buff).to_string()
-    };
-    assert_eq!(act, exp)
+
+        thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(start(port)).unwrap();
+        })
+    }
+
+    fn random_string(size: usize) -> String {
+        const CANDIDATES: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+        let mut rng = &mut rand::thread_rng();
+        let chars = CANDIDATES
+            .as_bytes()
+            .choose_multiple(&mut rng, size)
+            .cloned()
+            .collect();
+        String::from_utf8(chars).unwrap()
+    }
+
+    #[test]
+    #[ignore]
+    fn test_proxy() -> Result<()> {
+        const SRC_PORT: u16 = 11081;
+        const PROXY_PORT: u16 = 11080;
+        const DST_PORT: u16 = 10080;
+
+        let handle_echo = start_oneshot_echo_server(DST_PORT);
+        let config = gk::ServerConfig::new(
+            "127.0.0.1".parse().unwrap(),
+            PROXY_PORT,
+            gk::ConnectRule::any(),
+        );
+        let (mut server, tx_gk) = gk::server::Server::new(config);
+        let handle_gk = thread::spawn(move || {
+            server.serve().unwrap();
+        });
+        let config = ServerConfig::new(
+            format!("127.0.0.1:{}", SRC_PORT).parse().unwrap(),
+            format!("127.0.0.1:{}", PROXY_PORT).parse().unwrap(),
+            format!("127.0.0.1:{}", DST_PORT).parse().unwrap(),
+        );
+        let (mut server, tx_ts) = Server::new(config);
+        let handle_ts = thread::spawn(move || {
+            server.serve().unwrap();
+        });
+
+        // Wait starting servers.
+        thread::sleep(Duration::from_secs(1));
+
+        let s = random_string(128);
+        let mut buf = [0; 1024];
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", SRC_PORT))?;
+        stream.write(s.as_bytes())?;
+        let n = stream.read(&mut buf)?;
+        let got = String::from_utf8((&buf[..n]).to_vec()).unwrap();
+        assert_eq!(s, got);
+
+        tx_gk.send(gk::ServerCommand::Terminate).ok();
+        tx_ts.send(ServerCommand::Terminate).ok();
+        handle_echo.join().unwrap();
+        handle_gk.join().unwrap();
+        handle_ts.join().unwrap();
+
+        Ok(())
+    }
 }

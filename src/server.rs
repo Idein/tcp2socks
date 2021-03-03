@@ -75,12 +75,11 @@ use log::*;
 use rand::prelude::*;
 
 use crate::acceptor::{Binder, TcpBinder};
-use crate::auth_service::{AuthService, NoAuthService};
 use crate::byte_stream::ByteStream;
 use crate::config::ServerConfig;
-use crate::connector::{Connector, TcpUdpConnector};
+use crate::connector::{Connector, SocksConnector};
 use crate::error::Error;
-use crate::model::{ProtocolVersion, SocketAddr};
+use crate::model::SocketAddr;
 use crate::server_command::ServerCommand;
 use crate::session::{Session, SessionHandle, SessionId};
 use crate::thread::spawn_thread;
@@ -95,7 +94,6 @@ pub struct Server<S, T, C> {
     tx_acceptor_done: SyncSender<()>,
     /// make connection to service host
     connector: C,
-    protocol_version: ProtocolVersion,
     session: HashMap<SessionId, SessionHandle>,
     /// random context for generating SessionIds
     id_rng: StdRng,
@@ -131,8 +129,8 @@ where
 ///   Address of the client connects to this server.
 /// - *strm*
 ///   Established connection between a client and this server.
-fn spawn_session<S, D, M>(
-    session: Session<D, M, S>,
+fn spawn_session<S, D>(
+    session: Session<D, S>,
     tx: SyncSender<()>,
     addr: SocketAddr,
     strm: S,
@@ -140,7 +138,6 @@ fn spawn_session<S, D, M>(
 where
     S: ByteStream + 'static,
     D: Connector + 'static,
-    M: AuthService + 'static,
 {
     let session_th = spawn_thread(&format!("{}: {}", session.id, addr), move || {
         session.start(addr, strm)
@@ -149,10 +146,10 @@ where
     SessionHandle::new(addr, session_th, tx)
 }
 
-impl Server<TcpStream, TcpBinder, TcpUdpConnector> {
+impl Server<TcpStream, TcpBinder, SocksConnector> {
     pub fn new(config: ServerConfig) -> (Self, mpsc::Sender<ServerCommand<TcpStream>>) {
         let (tx_done, rx_done) = mpsc::sync_channel(1);
-        Server::<TcpStream, TcpBinder, TcpUdpConnector>::with_binder(
+        Server::<TcpStream, TcpBinder, SocksConnector>::with_binder(
             config.clone(),
             TcpBinder::new(
                 config.client_rw_timeout,
@@ -160,7 +157,7 @@ impl Server<TcpStream, TcpBinder, TcpUdpConnector> {
                 config.accept_timeout,
             ),
             tx_done,
-            TcpUdpConnector::new(config.server_rw_timeout),
+            SocksConnector::new(config.proxy_addr, config.server_rw_timeout),
         )
     }
 }
@@ -186,7 +183,6 @@ where
                 binder,
                 tx_acceptor_done,
                 connector,
-                protocol_version: ProtocolVersion::from(5),
                 session: HashMap::new(),
                 id_rng: StdRng::from_entropy(),
             },
@@ -207,7 +203,7 @@ where
 
     /// Server main loop
     pub fn serve(&mut self) -> Result<(), Error> {
-        let acceptor = self.binder.bind(self.config.server_addr())?;
+        let acceptor = self.binder.bind(self.config.server_addr)?;
         let accept_th = spawn_acceptor(acceptor, self.tx_cmd.clone())?;
 
         while let Ok(cmd) = self.rx_cmd.recv() {
@@ -228,11 +224,9 @@ where
                 Connect(stream, addr) => {
                     let (session, tx) = Session::new(
                         self.next_session_id(),
-                        self.protocol_version,
                         self.connector.clone(),
-                        NoAuthService::new(),
-                        self.config.server_addr(),
-                        self.config.connect_rule(),
+                        self.config.server_addr,
+                        self.config.dst_addr.clone(),
                         self.tx_cmd.clone(),
                     );
                     self.session
@@ -285,7 +279,7 @@ mod test {
                 Some(Duration::from_secs(3)),
             ),
             tx_done,
-            TcpUdpConnector::new(None),
+            SocksConnector::new("0.0.0.0:1080".parse().unwrap(), None),
         );
         let req_shutdown = Arc::new(Mutex::new(SystemTime::now()));
 
@@ -336,7 +330,7 @@ mod test {
                     ServerConfig::default(),
                     binder,
                     tx_done,
-                    TcpUdpConnector::new(None),
+                    SocksConnector::new("0.0.0.0:1080".parse().unwrap(), None),
                 );
                 *tx.lock().unwrap() = Some(stx);
                 server.serve().ok();

@@ -11,18 +11,6 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 pub enum ErrorKind {
     #[fail(display = "io error")]
     Io,
-    #[fail(display = "config error")]
-    Config,
-    #[fail(display = "auth error")]
-    Auth,
-    #[fail(display = "permission error")]
-    Permission,
-    #[fail(display = "not supported error")]
-    NotSupported,
-    #[fail(display = "not allowed error")]
-    NotAllowed,
-    #[fail(display = "unknown error")]
-    Unknown,
 }
 
 #[derive(Debug)]
@@ -85,18 +73,9 @@ impl From<model::Error> for Error {
             K::Io => err.context(ErrorKind::Io),
             K::Poisoned(_) => err.context(ErrorKind::Io),
             K::Disconnected { .. } => err.context(ErrorKind::Io),
-            K::MessageFormat { .. } => err.context(ErrorKind::Unknown),
-            K::Authentication => err.context(ErrorKind::Auth),
-            K::NoAcceptableMethod => err.context(ErrorKind::NotSupported),
-            K::UnrecognizedUsernamePassword => err.context(ErrorKind::Auth),
-            K::CommandNotSupported { .. } => err.context(ErrorKind::NotSupported),
-            K::HostUnreachable { .. } => err.context(ErrorKind::Io),
-            K::DomainNotResolved { .. } => err.context(ErrorKind::Io),
             K::PacketSizeLimitExceeded { .. } => err.context(ErrorKind::Io),
             K::AddressAlreadInUse { .. } => err.context(ErrorKind::Io),
             K::AddressNotAvailable { .. } => err.context(ErrorKind::Io),
-            K::ConnectionNotAllowed { .. } => err.context(ErrorKind::NotAllowed),
-            K::ConnectionRefused { .. } => err.context(ErrorKind::Io),
         };
         Error { inner: ctx }
     }

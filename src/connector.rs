@@ -64,7 +64,7 @@ fn conn_error(io_err: io::Error, addr: Address, prot: L4Protocol) -> model::Erro
 pub mod test {
     use super::*;
     use crate::byte_stream::ByteStream;
-    use model::ErrorKind;
+    use crate::model::ErrorKind;
     use std::collections::BTreeMap;
     use std::iter::FromIterator;
 

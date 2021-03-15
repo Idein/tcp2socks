@@ -45,6 +45,7 @@ pub mod test {
     }
 
     impl BufferStream {
+        #[allow(unused)]
         pub fn new() -> Self {
             BufferStream::with_buffer(vec![].into(), vec![].into())
         }
@@ -56,10 +57,12 @@ pub mod test {
             }
         }
 
+        #[allow(unused)]
         pub fn rd_buff<'a>(&'a self) -> MutexGuard<'a, io::Cursor<Vec<u8>>> {
             self.rd_buff.lock().unwrap()
         }
 
+        #[allow(unused)]
         pub fn wr_buff<'a>(&'a self) -> MutexGuard<'a, io::Cursor<Vec<u8>>> {
             self.wr_buff.lock().unwrap()
         }

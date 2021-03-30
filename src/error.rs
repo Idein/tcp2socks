@@ -70,12 +70,12 @@ impl From<model::Error> for Error {
     fn from(err: model::Error) -> Self {
         use model::ErrorKind as K;
         let ctx = match err.kind() {
-            K::Io => err.context(ErrorKind::Io),
-            K::Poisoned(_) => err.context(ErrorKind::Io),
-            K::Disconnected { .. } => err.context(ErrorKind::Io),
-            K::PacketSizeLimitExceeded { .. } => err.context(ErrorKind::Io),
-            K::AddressAlreadInUse { .. } => err.context(ErrorKind::Io),
-            K::AddressNotAvailable { .. } => err.context(ErrorKind::Io),
+            K::Io
+            | K::Poisoned(_)
+            | K::Disconnected { .. }
+            | K::PacketSizeLimitExceeded { .. }
+            | K::AddressAlreadInUse { .. }
+            | K::AddressNotAvailable { .. } => err.context(ErrorKind::Io),
         };
         Error { inner: ctx }
     }

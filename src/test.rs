@@ -15,7 +15,7 @@ mod tests {
 
     fn start_oneshot_echo_server(port: u16) -> JoinHandle<()> {
         async fn start(port: u16) -> Result<()> {
-            let listener = TcpListener::bind(&format!("127.0.0.1:{}", port)).await?;
+            let listener = TcpListener::bind(("127.0.0.1", port)).await?;
 
             let (mut socket, _) = listener.accept().await?;
 
@@ -91,7 +91,7 @@ mod tests {
 
         let s = random_string(128);
         let mut buf = [0; 1024];
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", SRC_PORT))?;
+        let mut stream = TcpStream::connect(("127.0.0.1", SRC_PORT))?;
         stream.write(s.as_bytes())?;
         let n = stream.read(&mut buf)?;
         let got = String::from_utf8((&buf[..n]).to_vec()).unwrap();

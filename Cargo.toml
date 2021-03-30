@@ -10,10 +10,6 @@ categories = ["network-programming"]
 readme = "README.md"
 description = "A proxy server converting TCP to SOCKS5"
 
-[lib]
-name = "tcp2socks"
-path = "src/lib.rs"
-
 [[bin]]
 name = "tcp2socksd"
 path = "src/main.rs"

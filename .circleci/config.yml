@@ -64,7 +64,7 @@ jobs:
       - run:
           name: Environment Setup
           command: |
-            rustup component add clippy rustfmt
+            rustup component add clippy
       - restore-rust-cache
       - run:
           name: Format

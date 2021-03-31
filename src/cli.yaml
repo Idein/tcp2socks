@@ -1,0 +1,10 @@
+name: tcp2socks
+version: "0.1.0"
+author: "Idein Inc. <contact@idein.jp>"
+about: "Proxy server converting TCP to SOCKS5"
+args:
+  - url:
+      value_name: url
+      about: "Sets pipeline, e.g. \n$ tcp2socksd tcp://127.0.0.1:<port> socks5h://<socks-server-host>:<port> tcp://<dest-host>:<port>"
+      required: true
+      multiple: true

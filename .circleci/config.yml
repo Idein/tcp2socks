@@ -94,7 +94,7 @@ jobs:
       - run:
           name: Check tag (version) starts with crate_version
           command: |
-            version=$(git describe --tags)                                                      # e.g., 1.2.3 or 1.2.3-rc
+            version=$CIRCLE_TAG                                                                 # e.g., 1.2.3 or 1.2.3-rc
             crate_version=$(cargo run -- --version 2>/dev/null | grep -o '[0-9]\.[0-9]\.[0-9]') # e.g., 1.2.3
             echo "$version" | grep -q "^${crate_version}"
   build-release:
@@ -125,7 +125,7 @@ jobs:
       - run:
           name: Make Artifact
           command: |
-            version=$(git describe --tags)
+            version=$CIRCLE_TAG
             target=<<parameters.target>>
             name="tcp2socksd-${version}-${target}"
             mkdir -p "/tmp/work/$name"
@@ -156,11 +156,10 @@ jobs:
     steps:
       - attach_workspace:
           at: /tmp/persist
-      - checkout
       - run:
           name: "Publish Release on GitHub"
           command: |
-            version=$(git describe --tags)
+            version=$CIRCLE_TAG
             ghr -t "$GITHUB_TOKEN" -u "$CIRCLE_PROJECT_USERNAME" -r "$CIRCLE_PROJECT_REPONAME" -c "$CIRCLE_SHA1" -delete "$version" /tmp/persist/artifacts
 
 workflows:

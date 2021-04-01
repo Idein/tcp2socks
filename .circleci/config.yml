@@ -5,7 +5,7 @@ constants:
     branches:
       ignore: /.*/
     tags:
-      only: /^\d+.\d+.\d+(-.*)$/
+      only: /^\d+.\d+.\d+(-.*)?$/
   docker-image-rust: &docker-image-rust circleci/rust:1.50.0-buster
 
 commands:

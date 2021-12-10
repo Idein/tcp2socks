@@ -180,6 +180,7 @@ workflows:
               target:
                 - x86_64-unknown-linux-musl
                 - arm-unknown-linux-gnueabihf
+                - aarch64-unknown-linux-musl
       - pre-publish-github-release:
           filters: *release-filter
           requires:

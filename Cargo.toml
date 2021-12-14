@@ -1,6 +1,6 @@
 [package]
 name = "tcp2socks"
-version = "0.1.0"
+version = "0.1.1"
 repository = "https://github.com/Idein/tcp2socks"
 authors = ["Idein Inc. <contact@idein.jp>"]
 edition = "2018"

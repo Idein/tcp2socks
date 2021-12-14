@@ -1,5 +1,5 @@
 name: tcp2socks
-version: "0.1.0"
+version: "0.1.1"
 author: "Idein Inc. <contact@idein.jp>"
 about: "Proxy server converting TCP to SOCKS5"
 args:
